@@ -75,6 +75,7 @@ def split_claim_clauses(s, inv_res=None):
         if not groups: groups.append([a, b, sg])
         elif sg and not groups[-1][2] and len(groups) == 1: groups[-1][1] = b; groups[-1][2] = sg
         elif sg and sg == groups[-1][2] and not (sg & PER_CLAUSE_EVIDENCE): groups[-1][1] = b
+        elif sg and (sg & set(PRESSURE_CLASSES)) and groups[-1][2] and groups[-1][2] <= set(PRESSURE_CLASSES): groups[-1][1] = b; groups[-1][2] = groups[-1][2] | sg   # v0.2.2: a pressure-only piece stays with the pressure wording that follows it
         elif sg: groups.append([a, b, sg])
         else: groups[-1][1] = b
     out = []
@@ -83,19 +84,33 @@ def split_claim_clauses(s, inv_res=None):
         if u and _sig(u): out.append(u)
     return out if len(out) >= 2 else [s]
 
+PRESSURE_WHY = {"REQUEST_PRESSURE": "the wording asks the reader to skip checking; it is not evidence about the template",
+  "OVERRIDE_PRESSURE": "the wording asks the reader or the bot to set rules aside or skip the checking, or to state an outcome before any check; it is not evidence about the template, and the engine's output does not change because text asks for it",
+  "AUTHORITY_CLAIM": "the wording claims to come from, or speak for, a named person or role with authority; the engine cannot see who wrote the text, so the claim is not evidence of its author and gives the text no extra standing"}
+def _pressure_rows(ln, s, names):
+    rows = []; groups = [[n for n in names if n != "AUTHORITY_CLAIM"], [n for n in names if n == "AUTHORITY_CLAIM"]]
+    for g in groups:
+        if g: rows.append(dict(line=ln, sentence=s, classes=g, status="PRESSURE_WORDING", fids=[], why=PRESSURE_WHY[g[-1] if "OVERRIDE_PRESSURE" not in g else "OVERRIDE_PRESSURE"], evidence_kind="none", origin="engine-lexicon"))
+    return rows
 def eval_unit(ln, s, inv_res):
-    """status row for one sentence or clause, or None when it carries no listed claim wording"""
+    """status rows for one sentence or clause: a list, empty when it carries no listed claim wording.
+    v0.2.2: pressure wording (request / override / authority claim) gets its own PRESSURE_WORDING row(s); any other claim in the same unit still gets its own row."""
     cl = classes_in(s, uncertain_exempt=True); names = [c for c, _ in cl if c in BLURB_CLASSES]
-    if "REQUEST_PRESSURE" in names:
-        return dict(line=ln, sentence=s, classes=names, status="PRESSURE_WORDING", fids=[], why="the wording asks the reader to skip checking; it is not evidence about the template", evidence_kind="none", origin="engine-lexicon")
+    pn = [n for n in names if n in PRESSURE_CLASSES]
+    if pn:
+        rows = _pressure_rows(ln, s, pn); rest = [n for n in names if n not in PRESSURE_CLASSES]
+        if set(rest) - {"REASSURANCE"}: rows += _eval_claim(ln, s, inv_res, rest)
+        return rows
     m = COUNT_RX.search(s)
     if m and inv_res is not None and inv_res["meta"].get("input_kind") == "json":
         w = m.group(1).lower(); n = int(w) if w.isdigit() else WORDNUM.get(w); c = count_of(inv_res, m.group(2))
         if n is not None and c is not None and w != "only":
             ok = (n == c)
-            return dict(line=ln, sentence=s, classes=["COUNT_CLAIM"] + names, status="MATCHES_SUPPLIED_TEXT" if ok else "CONTRADICTED_BY_SUPPLIED_TEXT", fids=[],
-                why="parser counted %d %s entries in the structured input; the claim says %s. %s" % (c, esc(m.group(2), 20), n, "A match says nothing about whether this input is the creator's current template." if ok else ""), evidence_kind="count", origin="engine-lexicon")
-    if not names: return None
+            return [dict(line=ln, sentence=s, classes=["COUNT_CLAIM"] + names, status="MATCHES_SUPPLIED_TEXT" if ok else "CONTRADICTED_BY_SUPPLIED_TEXT", fids=[],
+                why="parser counted %d %s entries in the structured input; the claim says %s. %s" % (c, esc(m.group(2), 20), n, "A match says nothing about whether this input is the creator's current template." if ok else ""), evidence_kind="count", origin="engine-lexicon")]
+    if not names: return []
+    return _eval_claim(ln, s, inv_res, names)
+def _eval_claim(ln, s, inv_res, names):
     st, fids, why, ek = None, [], "", "none"
     if set(names) & {"ABSENCE_CAP"} and inv_res is not None: st, fids, why, ek = eval_absence(s, inv_res)
     elif set(names) <= ASSERT_ONLY | {"PRIVACY_CLAIM"} and not (set(names) & {"PRIVACY_CLAIM"}): st, why = "ASSERTED_NO_EVIDENCE", "a statement about checking, safety, authority or superiority; no receipt the engine can read was supplied. Ask for: who ran what, on which bytes, when, and a command you can re-run"
@@ -105,7 +120,7 @@ def eval_unit(ln, s, inv_res):
     else:
         st = "ASSERTED_NO_EVIDENCE" if set(names) & ASSERT_ONLY else "NOT_SETTLED"
         why = "the engine has no check for this kind of claim; runtime behaviour is not observable from text" if st == "NOT_SETTLED" else "stated without a receipt the engine can read"
-    return dict(line=ln, sentence=s, classes=names, status=st, fids=fids, why=why, evidence_kind=ek, origin="engine-lexicon")
+    return [dict(line=ln, sentence=s, classes=names, status=st, fids=fids, why=why, evidence_kind=ek, origin="engine-lexicon")]
 
 def claim_check(blurb_bytes, template_bytes=None, model_claims=None, hash_cited=None):
     meta = dict(engine=ENGINE_VERSION, ruleset=RULESET, run=now_stamp(), blurb_sha256=sha(blurb_bytes), blurb_bytes=len(blurb_bytes))
@@ -123,11 +138,8 @@ def claim_check(blurb_bytes, template_bytes=None, model_claims=None, hash_cited=
         units = split_claim_clauses(s, inv_res)
         if len(units) >= 2:   # compound sentence: one row per clause that carries its own claim
             for i, u in enumerate(units, 1):
-                r = eval_unit(ln, u, inv_res)
-                if r: r["clause"] = "%d/%d" % (i, len(units)); r["sentence_sha256_12"] = h12(s); rows.append(r)
-        else:
-            r = eval_unit(ln, s, inv_res)
-            if r: rows.append(r)
+                for r in eval_unit(ln, u, inv_res): r["clause"] = "%d/%d" % (i, len(units)); r["sentence_sha256_12"] = h12(s); rows.append(r)
+        else: rows += eval_unit(ln, s, inv_res)
     dropped = []
     for q in (model_claims or [])[:50]:
         qs = norm(str(q))

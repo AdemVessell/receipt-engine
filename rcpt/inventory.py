@@ -7,7 +7,11 @@ PLUGIN_TABLE = {"gmail": (["email"], ["SEND"]), "outlook": (["email"], ["SEND"])
  "telegram": (["inbound_chat"], ["SEND"]), "whatsapp": (["inbound_chat"], ["SEND"]), "discord": (["inbound_chat"], ["POST"]), "x": (["x_content"], ["POST", "SEND"]), "twitter": (["x_content"], ["POST", "SEND"]),
  "x-money": ([], ["PAY"]), "xmoney": ([], ["PAY"]), "github": ([], ["CODE_PUSH"]), "browser": (["web"], []), "web": (["web"], []), "shell": ([], ["EXEC"]), "computer": ([], ["EXEC"]),
  "terminal": ([], ["EXEC"]), "drive": (["shared_docs"], ["DELETE"]), "gdrive": (["shared_docs"], ["DELETE"])}
-TRIGGER_UNTRUSTED = {"email": "yes", "webhook": "yes", "slack": "yes", "microsoftteams": "yes", "github": "maybe", "origin": "maybe", "linear": "maybe", "sentry": "maybe", "cron": "no"}
+TRIGGER_UNTRUSTED = {"email": "yes", "webhook": "yes", "slack": "yes", "microsoftteams": "yes", "github": "maybe", "origin": "maybe", "linear": "maybe", "sentry": "maybe", "cron": "no", "schedule": "no", "rrule": "no"}
+# v0.2.2: field names accepted as the schedule of a routine, in priority order (case-insensitive). "trigger" counts only when its value is a schedule string or holds one.
+SCHED_KEYS = ("schedule", "cron", "cron_expression", "cronexpression", "rrule", "recurrence", "every", "frequency", "interval")
+ROUTINE_KNOWN = {"name", "instruction", "prompt", "schedule", "trigger", "cron", "cron_expression", "cronexpression", "rrule", "recurrence", "every", "frequency", "interval"}
+SCHED_INNER = ("cron", "cron_expression", "cronexpression", "expression", "schedule", "rrule", "recurrence", "every", "frequency", "interval")
 
 def parse_field(f, lo, hi):
     vals = set()
@@ -20,9 +24,24 @@ def parse_field(f, lo, hi):
         if a < lo or b > hi or a > b or step < 1: raise ValueError
         vals |= set(range(a, b + 1, step))
     return vals
+RR_DAYS = {"MO", "TU", "WE", "TH", "FR", "SA", "SU"}
+def parse_rrule(s):
+    """RFC 5545-style recurrence text (FREQ/INTERVAL/BYDAY/BYHOUR/BYMINUTE). Returns None when it is not one."""
+    t = re.sub(r"(?i)^\s*(?:RRULE|DTSTART[^\n]*\n\s*RRULE)\s*:", "", s.strip()); kv = {}
+    for part in re.split(r"[;\n]", t):
+        if "=" in part: k, v = part.split("=", 1); kv[k.strip().upper()] = v.strip().upper()
+    fr = kv.get("FREQ")
+    if fr not in ("MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"): return None
+    try: iv = max(1, int(kv.get("INTERVAL", "1")))
+    except ValueError: return None
+    days = [d[-2:] for d in kv.get("BYDAY", "").split(",") if d[-2:] in RR_DAYS]; nh = len([x for x in kv.get("BYHOUR", "").split(",") if x.strip()]) or 1; nm = len([x for x in kv.get("BYMINUTE", "").split(",") if x.strip()]) or 1
+    per_day = {"MINUTELY": 1440 / iv, "HOURLY": 24 / iv, "DAILY": nh * nm / iv, "WEEKLY": nh * nm * (len(days) or 1) / 7 / iv, "MONTHLY": nh * nm / 30.4 / iv, "YEARLY": nh * nm / 365 / iv}[fr]
+    return dict(kind="rrule", freq=fr, avg_runs_per_day=round(per_day, 3), weekdays_only=(set(days) == {"MO", "TU", "WE", "TH", "FR"}))
 def parse_schedule(s):
     s = (s or "").strip()
     if not s: return dict(kind="none")
+    rr = parse_rrule(s) if re.search(r"(?i)\bFREQ\s*=", s) else None
+    if rr: return rr
     p = s.split()
     if len(p) == 5:
         try:
@@ -30,9 +49,9 @@ def parse_schedule(s):
             dw = {0 if d == 7 else d for d in dw}
             return dict(kind="cron", runs_per_active_day=len(mi) * len(ho), avg_runs_per_day=round(len(mi) * len(ho) * (len(dw) / 7) * (len(dom) / 31) * (len(mo) / 12), 3), weekdays_only=(dw == {1, 2, 3, 4, 5}))
         except Exception: pass
-    t = s.lower(); m = re.search(r"every\s+(\d+)\s*(?:minutes?|mins?)\b", t)
+    t = s.lower(); m = re.search(r"every\s+(\d+)\s*(?:minutes?|mins?|m)\b", t)
     if m: return dict(kind="natural", avg_runs_per_day=round(1440 / max(1, int(m.group(1))), 2))
-    m = re.search(r"every\s+(\d+)\s*hours?", t)
+    m = re.search(r"every\s+(\d+)\s*(?:hours?|hrs?|h)\b", t)
     if m: return dict(kind="natural", avg_runs_per_day=round(24 / max(1, int(m.group(1))), 2))
     if re.search(r"\b(hourly|every hour)\b", t): return dict(kind="natural", avg_runs_per_day=24)
     if re.search(r"\b(daily|every day|every morning|every evening|every night)\b", t): return dict(kind="natural", avg_runs_per_day=1)
@@ -61,6 +80,24 @@ def S(v, cap=200_000):
     try: return json.dumps(v, ensure_ascii=False, default=str)[:cap]
     except Exception: return repr(type(v))
 KNOWN_TOP = {"name", "description", "title", "instructions", "memories", "skills", "routines", "plugins", "meta", "template", "avatar", "avatarColor", "avatarShape", "gettingStarted"}
+def _is_sched_string(v):
+    if not isinstance(v, str) or not v.strip(): return False
+    return parse_schedule(v)["kind"] in ("cron", "rrule", "natural")
+def routine_schedule(x):
+    """v0.2.2: find the schedule of a routine entry under any accepted field name. Returns (schedule value, trigger value, field used, other schedule fields seen)."""
+    low = {str(k).lower(): k for k in x}; found = [(k, x[low[k]]) for k in SCHED_KEYS if k in low and x[low[k]] not in (None, "")]
+    trig = x.get("trigger"); sched = None; skey = None
+    if found: skey, sched = found[0]
+    if isinstance(sched, dict):   # {"cron": "..."} / {"type": "cron", "expression": "..."}
+        inner = next((v for k in SCHED_INNER for kk, v in sched.items() if str(kk).lower() == k and isinstance(v, str) and v.strip()), None)
+        if inner is not None: skey = "%s.%s" % (skey, next(kk for kk, v in sched.items() if v is inner)); sched = inner
+    if isinstance(sched, str) and skey in ("every", "frequency", "interval") and not re.search(r"(?i)\bevery\b|\bFREQ=", sched): sched = "every " + sched
+    if sched is None and trig is not None:   # trigger used as a schedule alias
+        if _is_sched_string(trig): sched, skey, trig = trig, "trigger", None
+        elif isinstance(trig, dict):
+            inner = next((v for k in SCHED_INNER for kk, v in trig.items() if str(kk).lower() == k and _is_sched_string(v)), None)
+            if inner is not None: sched, skey = inner, "trigger." + next(kk for kk, v in trig.items() if v is inner)
+    return sched, trig, skey, [k for k, _ in found[1:]]
 def build_components(inv, obj):
     comps = []
     def C(cid, kind, name, text, struct=None): comps.append(dict(id=cid, kind=kind, name=name, text=text, struct=struct))
@@ -89,9 +126,11 @@ def build_components(inv, obj):
     for x in lst("routines"):
         if not isinstance(x, dict): inv.add("schema", "routines", 0, "routine entry is %s" % type(x).__name__, sub="type_mismatch"); C("routine:?", "routine", "?", S(x)); continue
         nm = uname("routine", S(x.get("name", "?"), 80))
-        C("routine:" + nm, "routine", nm, S(x.get("instruction", x.get("prompt", ""))), struct=dict(schedule=x.get("schedule"), trigger=x.get("trigger")))
+        sched, trig, skey, extra_keys = routine_schedule(x)
+        C("routine:" + nm, "routine", nm, S(x.get("instruction", x.get("prompt", ""))), struct=dict(schedule=sched, trigger=trig, schedule_field=skey))
+        for k in extra_keys: inv.add("schema", "routine:" + nm, 0, k, sub="multiple_schedule_fields")
         for k in x:
-            if k not in ("name", "instruction", "prompt", "schedule", "trigger"): inv.add("schema", "routine:" + nm, 0, k, sub="unknown_field"); C("routine:%s/%s" % (nm, esc(k, 30)), "routine", nm, S(x[k]))
+            if str(k).lower() not in ROUTINE_KNOWN: inv.add("schema", "routine:" + nm, 0, k, sub="unknown_field"); C("routine:%s/%s" % (nm, esc(k, 30)), "routine", nm, S(x[k]))
     for x in lst("plugins"):
         d = x if isinstance(x, dict) else dict(name=S(x))
         nm = uname("plugin", S(d.get("name", d.get("id", "?")), 80)); C("plugin:" + nm, "plugin", nm, S(x), struct=d)
@@ -114,7 +153,7 @@ def routine_facts(inv, c):
     st = c["struct"] or {}; sched = S(st.get("schedule")); ps = parse_schedule(sched); types = trigger_types(st.get("trigger"))
     infl = [TRIGGER_UNTRUSTED.get(t, "maybe") for t in types]
     caps = sorted({f["cls"] for f in inv.facts if f["kind"] == "capability" and f["component"] == c["id"]})
-    inv.add("routine", c["id"], 0, c["name"], sub="structured", extra=dict(schedule=ps, schedule_raw=esc(sched, 60), trigger_types=types,
+    inv.add("routine", c["id"], 0, c["name"], sub="structured", extra=dict(schedule=ps, schedule_raw=esc(sched, 60), schedule_field=st.get("schedule_field") or "none", trigger_types=types,
             trigger_influenceable_by_outsiders=("yes" if "yes" in infl else "maybe" if "maybe" in infl else "no" if infl else "n/a"),
             approval_wording_in_text=approval_state(c["text"]), capability_keywords_in_text=caps), method="routine-fields", key=c["id"] + "|" + sched + "|" + ",".join(types))
     if sched.strip() and ps["kind"] == "unparsed": inv.add("schema", c["id"], 0, "schedule not parsed", sub="schedule_unparsed")
@@ -174,7 +213,7 @@ def render_inventory(res):
         L.append("| id | level | where | " + " | ".join(cols) + " |"); L.append("|---|---|---|" + "---|" * len(cols))
         for f in rows: L.append("| %s | %s | %s:%s | %s |" % (f["fid"], f["level"], data(f["component"], 50), f["line"], " | ".join(row(f))))
     sect("Plugins listed in the plugins field", "plugin entries", ["plugin", "plugin_launcher"], ["entry", "guess from name (L2h)"], lambda f: [data(f["value"], 50), esc(f.get("class_basis", f["sub"])) + " " + esc(",".join(f.get("name_list_classes", [])))])
-    sect("Routines (fields parsed)", "routine entries", ["routine"], ["name", "schedule", "trigger types", "outsiders can influence trigger", "approval wording in text"], lambda f: [data(f["value"], 50), esc(json.dumps(f["schedule"])), esc(",".join(f["trigger_types"]) or "none"), f["trigger_influenceable_by_outsiders"], f["approval_wording_in_text"]])
+    sect("Routines (fields parsed)", "routine entries", ["routine"], ["name", "schedule", "trigger types", "outsiders can influence trigger", "approval wording in text"], lambda f: [data(f["value"], 50), esc(json.dumps(f["schedule"]) + (" (field " + f["schedule_field"] + ")" if f.get("schedule_field") not in (None, "none") else "")), esc(",".join(f["trigger_types"]) or "none"), f["trigger_influenceable_by_outsiders"], f["approval_wording_in_text"]])
     sect("Capability keywords in text and from plugin names", "capability keyword matches", ["capability"], ["class", "basis", "sentence (data)"], lambda f: [f["cls"], esc(f.get("basis", "text keyword")), data(f["quote"], 90)])
     sect("Prohibition wording (negated keyword, clause level)", "prohibition wordings", ["prohibition"], ["class", "sentence (data)"], lambda f: [f["cls"], data(f["quote"], 90)])
     sect("Outside-input channels mentioned", "outside-input channel mentions", ["untrusted_input"], ["channel", "basis"], lambda f: [esc(f["sub"]), esc(f.get("basis", ""))])

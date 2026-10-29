@@ -37,8 +37,28 @@ CLASSES = {
    R(r"\b(?:limited[- ]time|limited (?:offer|spots?|slots?|availability|supply|stock)|only \d+\s+(?:left|spots?|slots?|copies)|while (?:supplies|stocks?) last|last chance|(?:today|tonight) only|time[- ]sensitive|running out of time|urgent(?:ly)?|hurry(?: up)?|act fast|don'?t (?:miss out|wait|delay|hesitate|overthink|think twice)|do not (?:miss out|wait|delay|hesitate|overthink))\b"),
    R(r"\b(?:trust (?:me|us|the process)|take my word|believe me|just trust|(?:no|without)\s+(?:need|time|reason)\s+(?:to\s+)?(?:check|read|review|verify|look|inspect|think|double[- ]check)\w*|without\s+(?:reading|checking|reviewing|verifying|inspecting)|(?:you can |you may |feel free to )?skip(?:ping)?\s+(?:the |any |all |your |this )?(?:\w+\s+)?(?:review|check|checks|verification|approval|reading|scan|audit|inspection)|no need for (?:a |any )?(?:review|check|verification|audit|approval))\b")],
 }
+# v0.2.2: override / impersonation pressure and authority claims. Lexical only: it matches words, never who actually wrote the text.
+_ROLE = r"(?:adem|(?:the |your |my )?owner|(?:the |your |my )?admin(?:istrator)?|(?:the |your |my )?developer|(?:the |your |my )?dev(?:eloper)? team|(?:the |your |my )?creator|(?:the |your |my )?operator|(?:the |your |my )?maintainer|(?:the |your |my )?sysadmin|(?:the |your |my )?system admin|(?:the |your |my )?security team|root)"
+_ROLE_NOART = r"(?:adem|owner|admin(?:istrator)?|developer|dev(?:eloper)? team|creator|operator|maintainer|sysadmin|system admin|security team|root|account holder|real user)"
+CLASSES["OVERRIDE_PRESSURE"] = [
+ R(r"\b(?:system|admin|root|developer|safety|security|priority|emergency|maintenance|manual)\s+(?:override|overrule|bypass|command|directive|notice)\b|\boverrid(?:e|es|ing|den)\b|\boverrul(?:e|es|ed|ing)\b"),
+ R(r"\b(?:ignore|disregard|forget|discard|abandon|set aside|stop following|do not follow|don'?t follow)\s+(?:(?:all|any|every|the|your|my|these|those|its|their|previous|prior|earlier|above|preceding|original|existing|other|safety|security|system)\s+){0,4}(?:rules?|instructions?|guidelines?|polic(?:y|ies)|prompts?|restrictions?|safeguards?|guardrails?|constraints?|limitations?|directions?|orders?|checks?|warnings?|protocols?)\b"),
+ R(r"\b(?:skip|bypass|avoid|circumvent|disable|turn off|switch off|stop|don'?t run|do not run|don'?t use|do not use|without (?:running|using))\s+(?:(?:the|this|that|any|all|your)\s+)?(?:\w+\s+)?(?:engine|rcpt|receipt|lint(?:er)?|checker|inventory|claim[- ]?check|selfhash|scanner|scan|checks?|safeguards?|guardrails?|verification|validation|filters?|restrictions?)\b"),
+ R(r"\b(?:say|tell (?:me|them|him|her|the (?:user|owner)|everyone|users?)|report|state|write|respond|answer|reply|confirm|declare|conclude)\s+(?:that\s+)?(?:it(?:'?s| is| was)|this(?:'?s| is)|that(?:'?s| is)|the (?:template|bot|file|skill|plugin) (?:is|was))\s*(?:as\s+)?(?:safe|fine|ok(?:ay)?|clean|verified|approved|harmless|secure|legit(?:imate)?|trustworthy|good|all clear|passed|benign)\b"),
+ R(r"\b(?:developer|dev|debug|god|admin(?:istrator)?|root|sudo|jailbreak|jailbroken|unrestricted|unfiltered|maintenance|override|bypass)\s+mode\b|\b(?:you are|you'?re) now (?:in |a |an |free|unrestricted|no longer|my|the)\b|\bact as (?:if )?(?:you (?:have|had) no|an? (?:unrestricted|unfiltered))\b|\bpretend (?:you (?:are|have|had)|there (?:is|are) no|to be)\b|\bno (?:rules|restrictions|limits|filters) (?:apply|now|anymore|any more)\b"),
+ R(r"\b(?:new|updated|revised|real|actual|secret|hidden|special)\s+(?:instructions?|rules|orders|directives?)\s*(?:are|follow|:|below)|\bthe (?:above|previous|earlier) (?:instructions?|rules)\s+(?:no longer apply|are (?:void|cancelled|canceled|obsolete|outdated|replaced))\b"),
+]
+CLASSES["AUTHORITY_CLAIM"] = [
+ R(r"\b(?:from|by|per|via|authori[sz]ed by|approved by|sent by|written by|ordered by|signed by|on behalf of|at the (?:request|order|direction|instruction) of|as (?:told|instructed|directed|requested|ordered) by|according to)\s+" + _ROLE + r"\b(?![\'\u2019]s\b)"),
+ R(r"\b(?:this is|i am|i'?m|we are|we'?re|you are talking to|you'?re talking to|speaking as|writing as)\s+(?:your |the |my |an? )?" + _ROLE_NOART + r"\b(?!\s+(?:guide|docs?|documentation|mode|version|tools?|portal|console|account))"),
+ R(r"\bas (?:your |the |an? )?" + _ROLE_NOART + r"\b(?=\s*[,:]|\s+(?:i|we)\b)"),
+ R(r"\b" + _ROLE + r"\s+(?:says?|said|told|tells?|wants?|wanted|has (?:approved|authori[sz]ed|confirmed|allowed|requested|ordered|instructed)|approved|authori[sz]ed|confirmed|allowed|requested|ordered|instructed|permitted|demands?|requires?|commands?)\b"),
+ R(r"\b(?:owner|admin(?:istrator)?|developer|root|sudo|adem)\s+(?:authori[sz]ation|approval|permission|access|privileges?|credentials?|clearance)\b|\bauthori[sz]ation\s+(?:code|granted|confirmed)\b"),
+ R(r"\[\s*(?:system|admin|developer|owner|root|operator)\s*\]|<\s*(?:system|admin|developer|owner)\s*>|(?:^|\n)\s*(?:system|admin|developer|owner)\s+(?:message|notice|prompt|instruction)s?\s*:"),
+]
+PRESSURE_CLASSES = ("REQUEST_PRESSURE", "OVERRIDE_PRESSURE", "AUTHORITY_CLAIM")
 # Used by Claim Check to read a blurb: which classes count as an overclaim worth a row
-BLURB_CLASSES = ["REASSURANCE", "SAFETY_ASSERT", "VERIFICATION_CLAIM", "ABSENCE_CAP", "APPROVAL_CLAIM", "PRIVACY_CLAIM", "SUPERIORITY", "AUTHORITY", "REQUEST_PRESSURE"]
+BLURB_CLASSES = ["REASSURANCE", "SAFETY_ASSERT", "VERIFICATION_CLAIM", "ABSENCE_CAP", "APPROVAL_CLAIM", "PRIVACY_CLAIM", "SUPERIORITY", "AUTHORITY", "REQUEST_PRESSURE", "OVERRIDE_PRESSURE", "AUTHORITY_CLAIM"]
 COUNT_RX = re.compile(r"(?i)\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a single|single|no|zero|only)\s+(routines?|plugins?|connectors?|skills?|memories|integrations?|automations?|schedules?|scheduled tasks?)\b")
 WORDNUM = dict(one=1, two=2, three=3, four=4, five=5, six=6, seven=7, eight=8, nine=9, ten=10, eleven=11, twelve=12, zero=0, no=0, single=1)
 HASH_RX = re.compile(r"\b[0-9a-fA-F]{64}\b")

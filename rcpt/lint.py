@@ -4,7 +4,7 @@ import re, json
 from core import *
 from lexicon import *
 
-LINT_CLASSES = ["SAFETY_ASSERT", "VERIFICATION_CLAIM", "SUPERIORITY", "REASSURANCE", "AUTHORITY", "REQUEST_PRESSURE"]
+LINT_CLASSES = ["SAFETY_ASSERT", "VERIFICATION_CLAIM", "SUPERIORITY", "REASSURANCE", "AUTHORITY", "REQUEST_PRESSURE", "OVERRIDE_PRESSURE", "AUTHORITY_CLAIM"]
 EXTRA = [("PASS_TERM", re.compile(r"(?i)\b(?:pass(?:ed|es)?|green|all clear|verdict|approved|rejected|score[ds]?|grade[ds]?|rated|rating)\b")),
          ("VERIFIED_TERM", re.compile(r"(?i)\b(?:backed(?:_by_receipt)?|verified|confirmed|validated|certified|proven|proves?|guarantee[ds]?|definitely|certainly|100%|impossible|nothing can)\b")),
          ("CONFIDENCE_NUMBER", re.compile(r"(?i)\b\d{1,3}(?:\.\d+)?\s?%(?![^\n]{0,40}\bn\s?=)")),

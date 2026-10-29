@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rcpt v1 prototype CLI. Commands: inventory FILE | claims BLURB [--template FILE] [--model-claims JSON] | lint FILE | selfhash.
+"""rcpt v1 prototype CLI. Commands: inventory FILE | claims BLURB [--template FILE] [--model-claims JSON] | lint FILE | selfhash | version.
 Options: --json (machine output), --expect-bytes N, --expect-sha HEX. Never raises: always prints a result block. Stdlib only, no network."""
 import sys, os, json, hashlib, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +14,8 @@ def selfhash():
     for f in sorted(os.listdir(d)):
         if f.endswith(".py"):
             b = open(os.path.join(d, f), "rb").read(); parts[f] = hashlib.sha256(b).hexdigest(); h.update(f.encode() + b"\0" + b)
-    return dict(result="OK", engine=ENGINE_VERSION, ruleset=RULESET, files=parts, combined_sha256=h.hexdigest(), note="Compare combined_sha256 with a value published outside this computer. A file on this computer can be edited by anything with the same user rights.")
+    return dict(result="OK", ENGINE_VERSION=ENGINE_VERSION, RULESET=RULESET, engine=ENGINE_VERSION, ruleset=RULESET, files=parts, combined_sha256=h.hexdigest(), note="Compare combined_sha256 with a value published outside this computer. A file on this computer can be edited by anything with the same user rights.")
+def version(): return dict(result="OK", ENGINE_VERSION=ENGINE_VERSION, RULESET=RULESET, engine=ENGINE_VERSION, ruleset=RULESET)
 def main(argv):
     ap = argparse.ArgumentParser(add_help=False); ap.add_argument("cmd", nargs="?"); ap.add_argument("file", nargs="?"); ap.add_argument("--template"); ap.add_argument("--model-claims"); ap.add_argument("--json", action="store_true")
     ap.add_argument("--expect-bytes", type=int); ap.add_argument("--expect-sha")
@@ -23,8 +24,9 @@ def main(argv):
     set_deadline(LIMITS["seconds"]); rawsha = None
     if os.environ.get("RCPT_TEST_HANG") == "1": time.sleep(120)   # test hook for the watchdog case T-01
     try:
-        if a.cmd == "selfhash": out = selfhash(); return json.dumps(out, indent=1) if a.json else "\n".join("%s  %s" % (v, k) for k, v in out["files"].items()) + "\ncombined_sha256 " + out["combined_sha256"] + "\n" + out["note"]
-        if a.cmd not in ("inventory", "claims", "lint") or not a.file: return "usage: rcpt.py inventory FILE | claims BLURB [--template FILE] [--model-claims JSON] | lint FILE | selfhash  [--json] [--expect-bytes N] [--expect-sha HEX]"
+        if a.cmd == "selfhash": out = selfhash(); return json.dumps(out, indent=1) if a.json else "\n".join("%s  %s" % (v, k) for k, v in out["files"].items()) + "\ncombined_sha256 " + out["combined_sha256"] + "\nENGINE_VERSION " + ENGINE_VERSION + "\nRULESET " + RULESET + "\n" + out["note"]
+        if a.cmd == "version": out = version(); return json.dumps(out, indent=1) if a.json else "ENGINE_VERSION %s\nRULESET %s" % (ENGINE_VERSION, RULESET)
+        if a.cmd not in ("inventory", "claims", "lint") or not a.file: return "usage: rcpt.py inventory FILE | claims BLURB [--template FILE] [--model-claims JSON] | lint FILE | selfhash | version  [--json] [--expect-bytes N] [--expect-sha HEX]"
         raw, err = read(a.file); rawsha = sha(raw)
         if err: res = dict(result=err, reason="file too large; nothing was scanned", meta=dict(engine=ENGINE_VERSION, ruleset=RULESET, input_sha256=rawsha, bytes=len(raw), run=now_stamp()), components=[], facts=[])
         elif a.cmd == "inventory":

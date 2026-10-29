@@ -1,8 +1,8 @@
 """rcpt core: hashing, folding, escaping, fixed wording, limits. Stdlib only. No network, no exec of input."""
 import re, json, time, hashlib, unicodedata, datetime
 
-ENGINE_VERSION = "0.2.1"
-RULESET = "rcpt-2026-10-29.3"
+ENGINE_VERSION = "0.2.2"
+RULESET = "rcpt-2026-10-29.4"
 LIMITS = dict(max_bytes=400_000, seconds=8, max_facts_per_kind=200, scan_chars=100_000, decode_depth=2, decode_candidates=200, decode_bytes=65_536)
 KL = datetime.timezone(datetime.timedelta(hours=8))
 SUFFIX = "NOT a statement that none exist."          # fixed text; the model may not paraphrase it
